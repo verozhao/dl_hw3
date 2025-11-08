@@ -62,7 +62,7 @@ def get_argparser():
     parser.add_argument("--continue_training", action='store_true', default=False)
 
     parser.add_argument("--loss_type", type=str, default='cross_entropy',
-                        choices=['cross_entropy'], help="You may add different loss types here")
+                        choices=['cross_entropy', 'focal_loss'], help="You may add different loss types here")
     parser.add_argument("--gpu_id", type=str, default='0',
                         help="GPU ID")
     parser.add_argument("--weight_decay", type=float, default=1e-4,
@@ -171,7 +171,7 @@ def validate(opts, model, loader, device, metrics, ret_samples_ids=None):
 def main():
     opts = get_argparser().parse_args()
     # TODO: you should fill the num_classes here. Don't forget to add the background class
-    opts.num_classes = 
+    opts.num_classes = 21
 
     os.environ['CUDA_VISIBLE_DEVICES'] = opts.gpu_id
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -208,21 +208,28 @@ def main():
     # Set up optimizer 
     # TODO Problem 3.1
     # please check argument parser for learning rate reference.
-    raise NotImplementedError
-    optimizer = 
+    params = [
+        {"params": model.backbone.parameters(), "lr": opts.lr * 0.1},
+        {"params": model.classifier.parameters(), "lr": opts.lr}
+    ]
+    optimizer = torch.optim.SGD(params, lr=opts.lr, momentum=0.9, weight_decay=opts.weight_decay)
 
     # Set up Learning Rate Policy
     # TODO Problem 3.1
     # please check argument parser for learning rate policy.
-    raise NotImplementedError
-    scheduler = 
+    if opts.lr_policy == 'poly':
+        scheduler = utils.PolyLR(optimizer, opts.total_itrs, power=0.9)
+    elif opts.lr_policy == 'step':
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=opts.step_size, gamma=0.9)
 
     # Set up criterion 
     # TODO Problem 3.1
     # please check argument parser for loss function.
     # in 3.3, please use CrossEntropyLoss.
-    raise NotImplementedError
-    criterion = 
+    if opts.loss_type == 'cross_entropy':
+        criterion = nn.CrossEntropyLoss(ignore_index=255)
+    elif opts.loss_type == 'focal_loss':
+        criterion = utils.FocalLoss(alpha=0.25, gamma=2, ignore_index=255)
     
     def save_ckpt(path):
         """ save current model
@@ -242,7 +249,7 @@ def main():
     cur_itrs = 0
     cur_epochs = 0
     if opts.ckpt is not None and os.path.isfile(opts.ckpt):
-        checkpoint = torch.load(opts.ckpt, map_location=torch.device('cpu'))
+        checkpoint = torch.load(opts.ckpt, map_location=torch.device('cpu'), weights_only=False)
         model.load_state_dict(checkpoint["model_state"])
         model = nn.DataParallel(model)
         model.to(device)
@@ -284,7 +291,11 @@ def main():
 
             # TODO Please finish the main training loop and record the mIoU
             # Problem 3.3 & Problem 3.4
-            raise NotImplementedError
+            optimizer.zero_grad()
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
 
             np_loss = loss.detach().cpu().numpy()
             interval_loss += np_loss
@@ -298,7 +309,10 @@ def main():
             scheduler.step()
 
             if cur_itrs >= opts.total_itrs:
-                return
+                break
+        
+        if cur_itrs >= opts.total_itrs:
+            break
 
         # evaluation after each epoch
         save_ckpt('checkpoints/latest_%s_%s_os%d.pth' %
@@ -312,13 +326,25 @@ def main():
 
         print(metrics.to_str(val_score))
         # TODO record mIoU with mIoU_per_epoch 
-        raise NotImplementedError
+        mIoU_per_epoch.append(val_score['Mean IoU'])
 
         if val_score['Mean IoU'] > best_score:  # save best model
             best_score = val_score['Mean IoU']
             print("new best mIOU: ", best_score)
             save_ckpt('checkpoints/best_%s_%s_os%d.pth' %
                         (opts.model, "VOC", opts.output_stride))
+            
+    np.save('miou_history_%s.npy' % opts.loss_type, np.array(mIoU_per_epoch))
+    
+    plt.figure(figsize=(10, 6))
+    plt.plot(range(1, len(mIoU_per_epoch)+1), mIoU_per_epoch, marker='o', linewidth=2)
+    plt.xlabel('Epoch', fontsize=12)
+    plt.ylabel('Mean IoU', fontsize=12)
+    plt.title(f'Mean IoU vs Epoch ({opts.loss_type})', fontsize=14)
+    plt.grid(True, alpha=0.3)
+    plt.savefig('miou_plot_%s.png' % opts.loss_type, dpi=150, bbox_inches='tight')
+    print(f"Plot saved as miou_plot_{opts.loss_type}.png")
+    print(f"Best mIoU: {best_score:.4f}")
 
 if __name__ == '__main__':
     main()

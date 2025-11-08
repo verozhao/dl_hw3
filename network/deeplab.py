@@ -11,21 +11,38 @@ __all__ = ["DeepLabV3"]
 class ASPPConv(nn.Module):
     def __init__(self, in_channels, out_channels, dilation):
         super(ASPPConv, self).__init__()
-        raise NotImplementedError
         # TODO Problem 2.1
         # ================================================================================ #
+        self.conv = nn.Conv2d(in_channels, out_channels, 3, padding=dilation, dilation=dilation, bias=False)
+        self.bn = nn.BatchNorm2d(out_channels)
+        self.relu = nn.ReLU()
+        
+    def forward(self, x):
+        x = self.conv(x)
+        x = self.bn(x)
+        x = self.relu(x)
+        return x
 
 class ASPPPooling(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(ASPPPooling, self).__init__()
-        raise NotImplementedError
         # TODO Problem 2.1
         # ================================================================================ #
+        self.gap = nn.AdaptiveAvgPool2d(1)
+        self.conv = nn.Conv2d(in_channels, out_channels, 1, bias=False)
+        self.bn = nn.BatchNorm2d(out_channels)
+        self.relu = nn.ReLU()
 
     def forward(self, x):
         # TODO Problem 2.1
         # ================================================================================ #
-        raise NotImplementedError
+        size = x.shape[-2:]
+        x = self.gap(x)
+        x = self.conv(x)
+        x = self.bn(x)
+        x = self.relu(x)
+        return F.interpolate(x, size=size, mode='bilinear', align_corners=False)
+
 
 
 class ASPP(nn.Module):
@@ -33,13 +50,35 @@ class ASPP(nn.Module):
         super(ASPP, self).__init__()
         # TODO Problem 2.1
         # ================================================================================ #
-        raise NotImplementedError
+        out_channels = 256
+        modules = []
+        modules.append(nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, 1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU()))
+        
+        for rate in atrous_rates:
+            modules.append(ASPPConv(in_channels, out_channels, rate))
+        
+        modules.append(ASPPPooling(in_channels, out_channels))
+        
+        self.convs = nn.ModuleList(modules)
+        
+        self.project = nn.Sequential(
+            nn.Conv2d(len(self.convs) * out_channels, out_channels, 1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(),
+            nn.Dropout(0.5))
         
 
     def forward(self, x):
         # TODO Problem 2.1
         # ================================================================================ #
-        raise NotImplementedError
+        res = []
+        for conv in self.convs:
+            res.append(conv(x))
+        res = torch.cat(res, dim=1)
+        return self.project(res)
 
 
 class DeepLabV3(_SimpleSegmentationModel):
@@ -70,14 +109,17 @@ class DeepLabHead(nn.Module):
         #   aspp_dilate: atrous_rates for ASPP
         #   
         # ================================================================================ #
-        raise NotImplementedError
+        self.aspp = ASPP(in_channels, aspp_dilate)
+        self.classifier = nn.Conv2d(256, num_classes, 1)
         
         self._init_weight()
 
     def forward(self, feature):
         # TODO Problem 2.2
         # ================================================================================ #
-        raise NotImplementedError
+        x = self.aspp(feature)
+        x = self.classifier(x)
+        return x
 
     def _init_weight(self):
         for m in self.modules():
@@ -99,12 +141,28 @@ class DeepLabHeadV3Plus(nn.Module):
         #   aspp_dilate: atrous_rates for ASPP
         #   
         # ================================================================================ #
+        self.aspp = ASPP(in_channels, aspp_dilate)
+        self.project = nn.Sequential(
+            nn.Conv2d(low_level_channels, 48, 1, bias=False),
+            nn.BatchNorm2d(48),
+            nn.ReLU())
+        self.classifier = nn.Sequential(
+            nn.Conv2d(304, 256, 3, padding=1, bias=False),
+            nn.BatchNorm2d(256),
+            nn.ReLU(),
+            nn.Conv2d(256, 256, 3, padding=1, bias=False),
+            nn.BatchNorm2d(256),
+            nn.ReLU(),
+            nn.Conv2d(256, num_classes, 1))
         self._init_weight()
 
     def forward(self, feature):
         # TODO Problem 2.2
         # ================================================================================ #
-        raise NotImplementedError
+        low_level_feature = self.project(feature['low_level'])
+        output_feature = self.aspp(feature['out'])
+        output_feature = F.interpolate(output_feature, size=low_level_feature.shape[2:], mode='bilinear', align_corners=False)
+        return self.classifier(torch.cat([low_level_feature, output_feature], dim=1))
     
     def _init_weight(self):
         for m in self.modules():

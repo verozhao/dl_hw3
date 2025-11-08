@@ -50,7 +50,7 @@ class VOCSegmentation(data.Dataset):
         self.transform = transform
         
         self.image_set = image_set
-        base_dir = "VOCdevkit/VOC2012"
+        base_dir = "data/VOCdevkit/VOC2012"
         voc_root = os.path.join(self.root, base_dir)
         image_dir = os.path.join(voc_root, 'JPEGImages')
 
@@ -88,7 +88,11 @@ class VOCSegmentation(data.Dataset):
         """
         # TODO Problem 1.1
         # =================================================
-        raise NotImplementedError
+        img = Image.open(self.images[index]).convert('RGB')
+        target = Image.open(self.masks[index])
+        if self.transform is not None:
+            img, target = self.transform(img, target)
+        return img, target
 
     def __len__(self):
         return len(self.images)
@@ -98,5 +102,5 @@ class VOCSegmentation(data.Dataset):
         """decode semantic mask to RGB image for visualization, using the color map"""
         # TODO Problem 1.1
         # =================================================
-        raise NotImplementedError
+        return cls.cmap[mask]
         # =================================================
